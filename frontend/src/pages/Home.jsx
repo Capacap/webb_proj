@@ -80,7 +80,9 @@ export default function Home() {
   const [newMessage, setNewMessage] = useState('');
   const [selectedConversation, setSelectedConversation] = useState(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSending, setIsSending] = useState(false);
   const textareaRef = useRef(null);
+  const containerRef = useRef(null);
 
   // Add sidebar toggle functionality
   const toggleSidebar = useCallback(() => setIsSidebarOpen(prev => !prev), []);
@@ -114,19 +116,93 @@ export default function Home() {
     return () => window.removeEventListener('resize', adjustHeight);
   }, [newMessage]);
 
-  // Handle sending new messages
-  const handleSendMessage = (e) => {
+  // Add scroll effect
+  useEffect(() => {
+    if (containerRef.current) {
+        containerRef.current.scrollTo({
+            top: containerRef.current.scrollHeight,
+            behavior: 'smooth'
+        });
+    }
+  }, [messages]);
+
+  // Update handleSendMessage to use API endpoint
+  const handleSendMessage = async (e) => {
     e.preventDefault();
     const trimmedMessage = newMessage.trim();
-    if (!trimmedMessage) return;
+    if (!trimmedMessage || isSending) return;
 
-    setMessages(prev => [...prev, {
+    // Create user message
+    const userMessage = {
       id: crypto.randomUUID(),
       text: trimmedMessage,
       sender: 'user',
       timestamp: new Date().toISOString()
-    }]);
-    setNewMessage('');
+    };
+
+    // Create temporary assistant loading message
+    const loadingMessage = {
+      id: `loading-${Date.now()}`,
+      text: '...',
+      sender: 'assistant',
+      isTemp: true
+    };
+
+    try {
+      setIsSending(true);
+      setMessages(prev => [...prev, userMessage, loadingMessage]);
+      setNewMessage('');
+
+      // Call textgen API endpoint
+      const response = await fetch('/api/textgen/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [...messages, userMessage].map(m => ({
+            role: m.sender,
+            content: m.text
+          }))
+        })
+      });
+
+      if (!response.ok) throw new Error('API request failed');
+
+      const data = await response.json();
+
+      // Replace loading message with actual response
+      setMessages(prev => [
+        ...prev.filter(msg => msg.id !== loadingMessage.id),
+        {
+          id: crypto.randomUUID(),
+          text: data.content,
+          sender: 'assistant',
+          timestamp: new Date().toISOString()
+        }
+      ]);
+    } catch (error) {
+      console.error('Error:', error);
+      // Add error message to UI
+      setMessages(prev => [
+        ...prev.filter(msg => msg.id !== loadingMessage.id),
+        {
+          id: crypto.randomUUID(),
+          text: `Error: ${error.message}`,
+          sender: 'assistant',
+          timestamp: new Date().toISOString()
+        }
+      ]);
+    } finally {
+      setIsSending(false);
+      // Add slight delay to ensure render completes
+      setTimeout(() => {
+        textareaRef.current?.focus();
+        // Restore cursor position
+        textareaRef.current?.setSelectionRange(
+          textareaRef.current.value.length,
+          textareaRef.current.value.length
+        );
+      }, 0);
+    }
   };
 
   return (
@@ -158,7 +234,11 @@ export default function Home() {
       )}
 
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="bg-gray-950 w-full h-full p-4 md:px-8 overflow-y-auto">
+        {/* Attach the ref to the messages container */}
+        <div 
+          ref={containerRef}
+          className="bg-gray-950 w-full h-full p-4 md:px-8 overflow-y-auto"
+        >
           <div className="max-w-4xl mx-auto flex flex-col gap-2">
             {messages.map((message) => (
               <MessageBubble key={message.id} message={message} />
@@ -176,7 +256,11 @@ export default function Home() {
                 placeholder="Type your message..."
                 className="w-full bg-transparent text-gray-100 resize-none outline-none placeholder-gray-500 rounded-lg transition-all"
                 style={{ minHeight: '40px', maxHeight: '500px' }}
-                onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage(e)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && !isSending) {
+                    handleSendMessage(e);
+                  }
+                }}
                 aria-label="Type your message"
               />
             </div>
@@ -184,11 +268,11 @@ export default function Home() {
             <div className="bg-gray-900 border-t border-gray-900 w-full flex justify-end p-2 rounded-b-lg">
               <button
                 type="submit"
-                disabled={!newMessage.trim()}
+                disabled={!newMessage.trim() || isSending}
                 className="bg-blue-600 text-white text-sm px-3 py-1.5 rounded-md border border-blue-500 hover:bg-blue-700 hover:border-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:border-blue-500"
                 aria-label="Send message"
               >
-                Send
+                {isSending ? 'Sending...' : 'Send'}
               </button>
             </div>
           </div>
