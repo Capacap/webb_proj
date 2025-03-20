@@ -5,7 +5,7 @@ from app.api.models import Base
 from app.settings import settings
 
 # echo = True to see the SQL queries
-engine = create_engine(f"{settings.DB_URL}", echo=True)
+engine = create_engine(settings.DATABASE_URL)
 
 
 def init_db():
