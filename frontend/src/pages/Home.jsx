@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useAuth } from '../context/AuthContext';
 
 // Move dummy data to constants at top
 const DUMMY_CONVERSATIONS = [
@@ -25,10 +26,19 @@ const INITIAL_MESSAGES = [
   { id: 13, text: "Key optimization strategies:\n1. Use React.memo for pure components\n2. Implement useCallback for stable function references\n3. Use useMemo for expensive calculations\n4. Virtualize long lists (react-window)\n5. Profile with React DevTools\n6. Code splitting with React.lazy\n7. Avoid unnecessary context updates\n8. Keep component state local when possible\n\nWould you like me to elaborate on any of these?", sender: 'assistant' }
 ];
 
-const ConversationSidebar = ({ conversations, selectedId, onSelect }) => (
+const ConversationSidebar = ({ conversations, selectedId, onSelect, onLogout }) => (
   <div className="w-64 h-full bg-gray-800 border-r border-gray-700 flex flex-col">
-    <div className="p-4 border-b border-gray-700">
+    <div className="p-4 border-b border-gray-700 flex justify-between items-center">
       <h1 className="text-white text-xl font-bold">ChatApp</h1>
+      <button
+        onClick={onLogout}
+        className="text-gray-400 hover:text-gray-200 text-sm"
+        title="Logout"
+      >
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+        </svg>
+      </button>
     </div>
     
     <nav className="flex-1 overflow-y-auto p-2" aria-label="Chat history">
@@ -42,7 +52,12 @@ const ConversationSidebar = ({ conversations, selectedId, onSelect }) => (
               : 'text-gray-300 hover:bg-gray-700 hover:text-white'}`}
           aria-current={selectedId === convo.id}
         >
-          {convo.title}
+          <div className="flex justify-between items-center">
+            <span>{convo.title}</span>
+            <span className="text-xs text-gray-400">
+              {convo.message_count} messages
+            </span>
+          </div>
         </button>
       ))}
     </nav>
@@ -76,6 +91,7 @@ const mainStyles = `
 `;
 
 export default function Home() {
+  const { logout } = useAuth();
   const [messages, setMessages] = useState(INITIAL_MESSAGES);
   const [newMessage, setNewMessage] = useState('');
   const [selectedConversation, setSelectedConversation] = useState(null);
@@ -83,6 +99,8 @@ export default function Home() {
   const [isSending, setIsSending] = useState(false);
   const textareaRef = useRef(null);
   const containerRef = useRef(null);
+  const [conversations, setConversations] = useState([]);
+  const [selectedConversationId, setSelectedConversationId] = useState(null);
 
   // Add sidebar toggle functionality
   const toggleSidebar = useCallback(() => setIsSidebarOpen(prev => !prev), []);
@@ -126,13 +144,27 @@ export default function Home() {
     }
   }, [messages]);
 
-  // Update handleSendMessage to use API endpoint
+  // Fetch conversations on mount
+  useEffect(() => {
+    const fetchConversations = async () => {
+      try {
+        const response = await fetch('/api/textgen/conversations');
+        if (!response.ok) throw new Error('Failed to fetch conversations');
+        const data = await response.json();
+        setConversations(data);
+      } catch (error) {
+        console.error('Error fetching conversations:', error);
+      }
+    };
+    fetchConversations();
+  }, []);
+
+  // Update handleSendMessage to use conversation ID
   const handleSendMessage = async (e) => {
     e.preventDefault();
     const trimmedMessage = newMessage.trim();
     if (!trimmedMessage || isSending) return;
 
-    // Create user message
     const userMessage = {
       id: crypto.randomUUID(),
       text: trimmedMessage,
@@ -140,7 +172,6 @@ export default function Home() {
       timestamp: new Date().toISOString()
     };
 
-    // Create temporary assistant loading message
     const loadingMessage = {
       id: `loading-${Date.now()}`,
       text: '...',
@@ -153,35 +184,43 @@ export default function Home() {
       setMessages(prev => [...prev, userMessage, loadingMessage]);
       setNewMessage('');
 
-      // Call textgen API endpoint
+      // Update API call to include conversation ID
       const response = await fetch('/api/textgen/generate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}` 
+        },
         body: JSON.stringify({
-          messages: [...messages, userMessage].map(m => ({
-            role: m.sender,
-            content: m.text
-          }))
+          messages: [{ role: 'user', content: trimmedMessage }],
+          conversation_id: selectedConversationId
         })
       });
 
       if (!response.ok) throw new Error('API request failed');
-
       const data = await response.json();
 
-      // Replace loading message with actual response
+      // Update messages with response data
       setMessages(prev => [
         ...prev.filter(msg => msg.id !== loadingMessage.id),
         {
-          id: crypto.randomUUID(),
+          id: data.message_id,
           text: data.content,
           sender: 'assistant',
           timestamp: new Date().toISOString()
         }
       ]);
+
+      // Refresh conversations list
+      if (!selectedConversationId) {
+        const convResponse = await fetch('/api/textgen/conversations');
+        const convData = await convResponse.json();
+        setConversations(convData);
+        setSelectedConversationId(data.conversation_id);
+      }
+
     } catch (error) {
       console.error('Error:', error);
-      // Add error message to UI
       setMessages(prev => [
         ...prev.filter(msg => msg.id !== loadingMessage.id),
         {
@@ -193,15 +232,26 @@ export default function Home() {
       ]);
     } finally {
       setIsSending(false);
-      // Add slight delay to ensure render completes
-      setTimeout(() => {
-        textareaRef.current?.focus();
-        // Restore cursor position
-        textareaRef.current?.setSelectionRange(
-          textareaRef.current.value.length,
-          textareaRef.current.value.length
-        );
-      }, 0);
+    }
+  };
+
+  // Add handler for conversation selection
+  const handleSelectConversation = async (convoId) => {
+    try {
+      setSelectedConversationId(convoId);
+      const response = await fetch(`/api/textgen/conversations/${convoId}`);
+      if (!response.ok) throw new Error('Failed to load conversation');
+      const messages = await response.json();
+      
+      setMessages(messages.map(m => ({
+        id: m.id,
+        text: m.text,
+        sender: m.is_user ? 'user' : 'assistant',
+        timestamp: m.created_at
+      })));
+      
+    } catch (error) {
+      console.error('Error loading conversation:', error);
     }
   };
 
@@ -227,9 +277,10 @@ export default function Home() {
       {/* Wrap ConversationSidebar in conditional render */}
       {isSidebarOpen && (
         <ConversationSidebar
-          conversations={DUMMY_CONVERSATIONS}
-          selectedId={selectedConversation}
-          onSelect={setSelectedConversation}
+          conversations={conversations}
+          selectedId={selectedConversationId}
+          onSelect={handleSelectConversation}
+          onLogout={logout}
         />
       )}
 

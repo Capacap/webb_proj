@@ -69,6 +69,36 @@ class EnrollmentStatus(str, Enum):
     DROPPED = "dropped"
 
 
+class Conversation(Base):
+    """Stores conversation history for users"""
+    __tablename__ = "conversations"
+    
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    
+    # Relationships
+    user: Mapped["User"] = relationship(back_populates="conversations")
+    messages: Mapped[List["ConversationMessage"]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="ConversationMessage.created_at"
+    )
+
+
+class ConversationMessage(Base):
+    """Stores individual messages within a conversation"""
+    __tablename__ = "conversation_messages"
+    
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    is_user: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"))
+    
+    # Relationships
+    conversation: Mapped["Conversation"] = relationship(back_populates="messages")
+
+
 class User(Base):
     """User model representing system users who can be enrolled in courses and belong to companies"""
 
@@ -91,6 +121,11 @@ class User(Base):
     company: Mapped["Company | None"] = relationship(back_populates="users")
     course_enrollments: Mapped[List["UserCourseEnrollment"]] = relationship(
         back_populates="user"
+    )
+    conversations: Mapped[List["Conversation"]] = relationship(
+        back_populates="user", 
+        cascade="all, delete-orphan",
+        order_by="Conversation.created_at.desc()"
     )
 
     # Auth
