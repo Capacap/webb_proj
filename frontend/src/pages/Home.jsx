@@ -1,32 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
+import authStore from '../stores/authStore';
 
-// Move dummy data to constants at top
-const DUMMY_CONVERSATIONS = [
-  { id: 1, title: "Chat about React props" },
-  { id: 2, title: "Project discussion" },
-  { id: 3, title: "Code review notes" },
-  { id: 4, title: "API integration talk" },
-  { id: 5, title: "UX feedback session" },
-];
-
-const INITIAL_MESSAGES = [
-  { id: 1, text: `Hi there! I'm your AI assistant. How can I help you today?`, sender: 'assistant' },
-  { id: 2, text: `I'm trying to understand how to implement a responsive grid layout in Tailwind CSS. Can you explain the best approach?`, sender: 'user' },
-  { id: 3, text: "Absolutely! Tailwind makes grid layouts straightforward. Here's a basic example:\n\n<div class=\"grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4\">\n  <!-- Grid items -->\n</div>\n\nThis creates a responsive grid that shows 1 column on mobile, 2 on medium screens, and 3 on large screens.", sender: 'assistant' },
-  { id: 4, text: "That makes sense! What about handling complex data fetching in React components? Should I use useEffect directly or a library like TanStack Query?", sender: 'user' },
-  { id: 5, text: "For most applications, I recommend using TanStack Query (formerly React Query). It provides better caching, deduping, and error handling out of the box compared to raw useEffect implementations. It also simplifies loading states and pagination.", sender: 'assistant' },
-  { id: 6, text: "Can you show me a basic example of using TanStack Query to fetch data from an API?", sender: 'user' },
-  { id: 7, text: "Sure! Here's a basic example:\n\nimport { useQuery } from '@tanstack/react-query';\n\nfunction UserProfile({ userId }) {\n  const { data, isLoading, error } = useQuery({\n    queryKey: ['user', userId],\n    queryFn: () =>\n      fetch(`/api/users/${userId}`).then(res => res.json())\n  });\n\n  if (isLoading) return 'Loading...';\n  if (error) return 'Error: ' + error.message;\n\n  return (\n    <div>\n      <h2>{data.name}</h2>\n      <p>{data.email}</p>\n    </div>\n  );\n}", sender: 'assistant' },
-  { id: 8, text: "Thanks! Now about state management - when would you recommend using Zustand over Redux Toolkit?", sender: 'user' },
-  { id: 9, text: "Zustand is great for simpler apps where you want a lightweight solution. Redux Toolkit is better for complex state interactions with features like:\n- Built-in devtools\n- Middleware support\n- Larger ecosystem\n- Better for team collaboration\n- Advanced state persistence\n\nZustand's API is more minimal and might feel more natural if you're familiar with React hooks.", sender: 'assistant' },
-  { id: 10, text: "How do I handle forms in React? Should I use a library like React Hook Form or build my own solution?", sender: 'user' },
-  { id: 11, text: "Definitely use React Hook Form. It provides:\n- Efficient re-renders\n- Built-in validation\n- Easy integration with UI libraries\n- Better performance\n- Support for complex nested forms\n\nHere's a quick example:\n\nimport { useForm } from 'react-hook-form';\n\nfunction LoginForm() {\n  const { register, handleSubmit } = useForm();\n  \n  const onSubmit = data => console.log(data);\n\n  return (\n    <form onSubmit={handleSubmit(onSubmit)}>\n      <input {...register('email')} />\n      <input {...register('password')} type=\"password\" />\n      <button type=\"submit\">Login</button>\n    </form>\n  );\n}", sender: 'assistant' },
-  { id: 12, text: "What's the best way to optimize React component renders? I'm seeing some performance issues in my app.", sender: 'user' },
-  { id: 13, text: "Key optimization strategies:\n1. Use React.memo for pure components\n2. Implement useCallback for stable function references\n3. Use useMemo for expensive calculations\n4. Virtualize long lists (react-window)\n5. Profile with React DevTools\n6. Code splitting with React.lazy\n7. Avoid unnecessary context updates\n8. Keep component state local when possible\n\nWould you like me to elaborate on any of these?", sender: 'assistant' }
-];
-
-const ConversationSidebar = ({ conversations, selectedId, onSelect, onLogout }) => (
+const ConversationSidebar = ({ conversations, selectedId, onSelect, onLogout, onNewConversation }) => (
   <div className="w-64 h-full bg-gray-800 border-r border-gray-700 flex flex-col">
     <div className="p-4 border-b border-gray-700 flex justify-between items-center">
       <h1 className="text-white text-xl font-bold">ChatApp</h1>
@@ -38,6 +14,18 @@ const ConversationSidebar = ({ conversations, selectedId, onSelect, onLogout }) 
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
         </svg>
+      </button>
+    </div>
+    
+    <div className="p-2">
+      <button
+        onClick={onNewConversation}
+        className="w-full py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-md flex items-center justify-center text-sm transition-colors"
+      >
+        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+        </svg>
+        New Conversation
       </button>
     </div>
     
@@ -92,7 +80,7 @@ const mainStyles = `
 
 export default function Home() {
   const { logout } = useAuth();
-  const [messages, setMessages] = useState(INITIAL_MESSAGES);
+  const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
   const [selectedConversation, setSelectedConversation] = useState(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -101,6 +89,7 @@ export default function Home() {
   const containerRef = useRef(null);
   const [conversations, setConversations] = useState([]);
   const [selectedConversationId, setSelectedConversationId] = useState(null);
+  const token = authStore(state => state.token);
 
   // Add sidebar toggle functionality
   const toggleSidebar = useCallback(() => setIsSidebarOpen(prev => !prev), []);
@@ -148,7 +137,11 @@ export default function Home() {
   useEffect(() => {
     const fetchConversations = async () => {
       try {
-        const response = await fetch('/api/textgen/conversations');
+        const response = await fetch('/api/textgen/conversations', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
         if (!response.ok) throw new Error('Failed to fetch conversations');
         const data = await response.json();
         setConversations(data);
@@ -156,8 +149,9 @@ export default function Home() {
         console.error('Error fetching conversations:', error);
       }
     };
+    
     fetchConversations();
-  }, []);
+  }, [token]);
 
   // Update handleSendMessage to use conversation ID
   const handleSendMessage = async (e) => {
@@ -189,7 +183,7 @@ export default function Home() {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}` 
+          'Authorization': `Bearer ${token}` 
         },
         body: JSON.stringify({
           messages: [{ role: 'user', content: trimmedMessage }],
@@ -213,7 +207,11 @@ export default function Home() {
 
       // Refresh conversations list
       if (!selectedConversationId) {
-        const convResponse = await fetch('/api/textgen/conversations');
+        const convResponse = await fetch('/api/textgen/conversations', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
         const convData = await convResponse.json();
         setConversations(convData);
         setSelectedConversationId(data.conversation_id);
@@ -239,7 +237,11 @@ export default function Home() {
   const handleSelectConversation = async (convoId) => {
     try {
       setSelectedConversationId(convoId);
-      const response = await fetch(`/api/textgen/conversations/${convoId}`);
+      const response = await fetch(`/api/textgen/conversations/${convoId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
       if (!response.ok) throw new Error('Failed to load conversation');
       const messages = await response.json();
       
@@ -254,6 +256,16 @@ export default function Home() {
       console.error('Error loading conversation:', error);
     }
   };
+
+  // Add a new function to handle starting a new conversation
+  const handleNewConversation = useCallback(() => {
+    setMessages([]);
+    setSelectedConversationId(null);
+  }, []);
+
+  useEffect(() => {
+    console.log("Token in localStorage:", localStorage.getItem('token'));
+  }, []);
 
   return (
     <main className={`${mainStyles} flex-1 flex relative`}>
@@ -281,6 +293,7 @@ export default function Home() {
           selectedId={selectedConversationId}
           onSelect={handleSelectConversation}
           onLogout={logout}
+          onNewConversation={handleNewConversation}
         />
       )}
 

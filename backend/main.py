@@ -1,20 +1,22 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.endpoints import textgen, authentication
-from app.db_setup import init_db
+from app.settings import settings
+from app.api.routers import router
 
-app = FastAPI()
+app = FastAPI(title="Webb Project API")
 
-@app.on_event("startup")
-def on_startup():
-    init_db()
-
-app.include_router(authentication.router)
-app.include_router(textgen.router)
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=getattr(settings, "CORS_ORIGINS", ["http://localhost:3000"]),
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+
+# Include routers
+app.include_router(router, prefix="/api")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

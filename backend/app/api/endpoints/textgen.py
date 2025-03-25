@@ -101,7 +101,7 @@ async def generate_text(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/conversations", response_model=list[ConversationOut])
-def get_conversations(
+async def get_conversations(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
