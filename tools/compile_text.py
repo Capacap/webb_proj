@@ -59,29 +59,40 @@ def deduplicate_content(parts: List[str]) -> List[str]:
     return unique_parts
 
 
-def extract_text_from_json(json_data: Dict[str, Any], concise: bool = True) -> str:
+def extract_text_from_json(json_data: Dict[str, Any], filename: str = "", concise: bool = True) -> str:
     """
     Extract meaningful text content from JSON data while minimizing tokens.
     
     Args:
         json_data: The JSON data to extract text from
+        filename: The name of the source file (without extension)
         concise: If True, produce more concise output
     
     Returns:
         Extracted text optimized for token efficiency
     """
-    text_parts = []
+    # Format the filename as a markdown heading
+    if filename:
+        # Clean up filename by replacing underscores with spaces and capitalizing words
+        clean_filename = filename.replace('_', ' ').title()
+        header = f"## {clean_filename}"
+    else:
+        # Fallback if no filename is provided
+        header = "## Unknown File"
     
-    # Content priority extraction - focus on the most important information first
+    # Start collecting content parts (after the header)
+    content_parts = []
     
-    # Title is important - always include if available
+    # Include title as a subheading if it's different from the filename
     if 'title' in json_data and json_data['title'] and json_data['title'] != 'Unknown Title':
         title = clean_text(json_data['title'])
-        text_parts.append(f"Title: {title}")
+        # Only add the title if it's substantially different from the filename
+        if not filename or not title.lower() in clean_filename.lower():
+            content_parts.append(title)
     
     # Only include URL in non-concise mode
     if not concise and 'url' in json_data and json_data['url']:
-        text_parts.append(f"Source: {json_data['url']}")
+        content_parts.append(f"Source: {json_data['url']}")
     
     # Main content extraction - adapt to different possible structures
     content_added = False
@@ -95,8 +106,7 @@ def extract_text_from_json(json_data: Dict[str, Any], concise: bool = True) -> s
             cleaned_paragraphs = [p for p in cleaned_paragraphs if len(p) > 30]
         
         if cleaned_paragraphs:
-            text_parts.append("Content:")
-            text_parts.extend(cleaned_paragraphs)
+            content_parts.extend(cleaned_paragraphs)
             content_added = True
     
     # Try sections if no paragraphs or as additional content
@@ -134,21 +144,22 @@ def extract_text_from_json(json_data: Dict[str, Any], concise: bool = True) -> s
             
             # Add section if it has meaningful content
             if section_content:
+                # Add section title as subsection
                 sections_text.append(f"{section_title}:")
                 sections_text.extend(section_content)
         
         if sections_text:
-            text_parts.extend(sections_text)
+            content_parts.extend(sections_text)
             content_added = True
     
     # Try to extract from 'text' field if nothing else worked
     if not content_added and 'text' in json_data and isinstance(json_data['text'], str):
         cleaned = clean_text(json_data['text'])
         if cleaned:
-            text_parts.append(cleaned)
+            content_parts.append(cleaned)
     
-    # Extract from lists but format them efficiently - only if we haven't added much content yet
-    if (not content_added or len(text_parts) < 3) and 'lists' in json_data and json_data['lists']:
+    # Extract from lists but format them efficiently
+    if 'lists' in json_data and json_data['lists']:
         list_items = []
         
         for list_items_group in json_data['lists']:
@@ -160,12 +171,12 @@ def extract_text_from_json(json_data: Dict[str, Any], concise: bool = True) -> s
                 if cleaned_items:
                     # For token efficiency, join list items with commas
                     if concise and all(len(item) < 40 for item in cleaned_items):
-                        list_items.append("Items: " + ", ".join(cleaned_items))
+                        list_items.append(", ".join(cleaned_items))
                     else:
                         list_items.extend(cleaned_items)
         
         if list_items:
-            text_parts.extend(list_items)
+            content_parts.extend(list_items)
     
     # Include tables only if critical and no other content, as they use many tokens
     if not content_added and 'tables' in json_data and json_data['tables']:
@@ -179,17 +190,20 @@ def extract_text_from_json(json_data: Dict[str, Any], concise: bool = True) -> s
                         rows_text.append(row_text)
             
             if rows_text:
-                text_parts.extend(rows_text)
+                content_parts.extend(rows_text)
     
     # Deduplicate content to save tokens
-    text_parts = deduplicate_content(text_parts)
+    content_parts = deduplicate_content(content_parts)
     
     # Limit total output size in concise mode
-    if concise and len(text_parts) > 10:
-        # Keep title and first 9 content pieces
-        text_parts = text_parts[:10]
+    if concise and len(content_parts) > 10:
+        content_parts = content_parts[:10]
     
-    return "\n".join(text_parts)
+    # Combine header with content
+    if content_parts:
+        return header + "\n" + "\n".join(content_parts)
+    else:
+        return header + "\n" + "No meaningful content found."
 
 
 def process_json_file(json_path: str, output_dir: str, concise: bool = True, 
@@ -208,9 +222,13 @@ def process_json_file(json_path: str, output_dir: str, concise: bool = True,
         if not any(key in json_data for key in ['title', 'paragraphs', 'sections', 'text', 'lists']):
             print(f"Skipping {json_path} - no extractable content")
             return
+        
+        # Extract filename without extension
+        base_name = os.path.basename(json_path)
+        file_name_without_ext = os.path.splitext(base_name)[0]
             
-        # Extract text content
-        text_content = extract_text_from_json(json_data, concise=concise)
+        # Extract text content with filename included
+        text_content = extract_text_from_json(json_data, file_name_without_ext, concise=concise)
         
         # Skip if no meaningful content was extracted
         if not text_content or len(text_content.strip()) < 50:
@@ -225,8 +243,7 @@ def process_json_file(json_path: str, output_dir: str, concise: bool = True,
                 f.write("\n")
         else:
             # Create output filename based on input filename
-            base_name = os.path.basename(json_path)
-            file_name = os.path.splitext(base_name)[0] + ".txt"
+            file_name = file_name_without_ext + ".txt"
             output_path = os.path.join(output_dir, file_name)
             
             # Write to individual text file
