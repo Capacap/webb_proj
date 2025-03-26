@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
+env/
 build/
 develop-eggs/
 dist/
@@ -15,7 +16,6 @@ lib64/
 parts/
 sdist/
 var/
-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -24,7 +24,6 @@ wheels/
 
 # Virtual Environment
 venv/
-env/
 .venv/
 
 # JavaScript
@@ -80,3 +79,9 @@ Thumbs.db
 # Testing
 junit.xml
 test-results/
+
+# Scraper data files
+tools/urls_to_scrape.txt
+tools/scraped_data/
+tools/scraped_urls.pkl
+tools/scraping.log

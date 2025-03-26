@@ -1,0 +1,13 @@
+{
+    "url_file": "tools/urls_to_scrape.txt",
+    "output_dir": "tools/scraped_data",
+    "url_cache_file": "tools/scraped_urls.pkl",
+    "log_file": "tools/scraping.log",
+    "max_pages_per_url": 200,
+    "parallel": true,
+    "rate_limit": 2,
+    "max_retries": 3,
+    "backoff_factor": 2,
+    "max_workers": 5,
+    "user_agent": "WikiScraper/1.0 (https://github.com/yourusername/wiki-scraper)"
+}
