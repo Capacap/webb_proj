@@ -84,4 +84,8 @@ test-results/
 tools/urls_to_scrape.txt
 tools/scraped_data/
 tools/scraped_urls.pkl
+tools/scraped_urls.pkl.db
 tools/scraping.log
+
+# Text data for vector database
+tools/text_data/

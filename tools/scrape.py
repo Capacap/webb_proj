@@ -34,7 +34,7 @@ DEFAULT_CONFIG = {
     "max_retries": 3,
     "backoff_factor": 2,
     "max_workers": 5,
-    "max_depth": 2,  # How deep to follow links (1 = just direct links, 2 = links of links, etc.)
+    "max_depth": 3,  # How deep to follow links (1 = just direct links, 2 = links of links, etc.)
     "user_agent": "WikiScraper/1.0 (https://github.com/yourusername/wiki-scraper)"
 }
 
