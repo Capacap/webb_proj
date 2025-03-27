@@ -107,7 +107,6 @@ export default function Home() {
   const [conversations, setConversations] = useState([]);
   const [selectedConversationId, setSelectedConversationId] = useState(null);
   const token = authStore(state => state.token);
-  const [isRagEnabled, setIsRagEnabled] = useState(true);
 
   // Add sidebar toggle functionality
   const toggleSidebar = useCallback(() => setIsSidebarOpen(prev => !prev), []);
@@ -214,8 +213,7 @@ export default function Home() {
         },
         body: JSON.stringify({
           messages: messageHistory,
-          conversation_id: selectedConversationId,
-          use_rag: isRagEnabled
+          conversation_id: selectedConversationId
         })
       });
 
@@ -405,19 +403,7 @@ export default function Home() {
             
             <div className="bg-gray-900 border-t border-gray-900 w-full flex justify-between items-center p-2 rounded-b-lg">
               <div className="flex items-center space-x-2">
-                <label className="text-sm text-gray-400">RAG:</label>
-                <button
-                  type="button"
-                  onClick={() => setIsRagEnabled(!isRagEnabled)}
-                  className={`px-2 py-1 text-xs rounded-md transition-colors ${
-                    isRagEnabled 
-                      ? 'bg-green-600 text-white hover:bg-green-700' 
-                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                  }`}
-                  aria-label="Toggle RAG"
-                >
-                  {isRagEnabled ? 'Enabled' : 'Disabled'}
-                </button>
+                {/* Removed RAG toggle button */}
               </div>
               
               <button

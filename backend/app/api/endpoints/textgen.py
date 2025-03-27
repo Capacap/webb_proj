@@ -11,12 +11,8 @@ from datetime import datetime
 from sqlalchemy import select
 import logging
 import json
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional
 from pathlib import Path
-import glob
-import shutil
-
-from app.core.vector_db import VectorStore, SearchResult
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -53,27 +49,13 @@ def rotate_logs() -> None:
     except Exception as e:
         logger.error(f"Error during log rotation: {str(e)}")
 
-# Path to the vector database directory
-VECTOR_DB_PATH: str = os.path.join(os.path.dirname(__file__), "../../../resources/vector_db")
-
 load_dotenv()  # Load environment variables
 
 router = APIRouter(tags=["textgen"], prefix="/textgen")
 
-# Initialize the vector database - load only once when the API starts
-vector_db = None
-try:
-    logger.info(f"Loading vector database from {VECTOR_DB_PATH}")
-    vector_db = VectorStore(vector_db_path=VECTOR_DB_PATH)
-    logger.info("Vector database loaded successfully")
-except Exception as e:
-    logger.error(f"Failed to load vector database: {str(e)}")
-    logger.warning("RAG functionality will be disabled")
-
 class ChatRequest(BaseModel):
-    messages: List[Dict[str, str]]  # Expecting format: [{"role": "user", "content": "..."}]
-    conversation_id: Optional[int] = None  # Add conversation reference
-    use_rag: bool = True  # Option to enable/disable RAG
+    messages: List[Dict[str, str]]
+    conversation_id: Optional[int] = None
 
 class ChatResponse(BaseModel):
     content: str
@@ -92,96 +74,20 @@ class MessageOut(BaseModel):
     is_user: bool
     created_at: datetime
 
-def get_relevant_context(query: str, messages: List[Dict[str, str]], top_k: int = 3) -> str:
-    """
-    Retrieve relevant context from the vector database based on the user query and conversation history.
-    
-    Args:
-        query: The user's current message
-        messages: The full conversation history
-        top_k: Number of relevant chunks to retrieve
-        
-    Returns:
-        A string containing the relevant context information
-    """
-    if vector_db is None:
-        return ""
-    
-    try:
-        # Extract relevant context from conversation history
-        conversation_context = []
-        for msg in reversed(messages[:-1]):  # Exclude the current message
-            if msg["role"] == "user":
-                conversation_context.append(msg["content"])
-        
-        # Combine current query with conversation context
-        full_context = " ".join([*conversation_context, query])
-        
-        # First search: Get broad context
-        broad_results = vector_db.search(full_context, k=top_k * 2)
-        
-        # Second search: Get specific context about the current query
-        specific_results = vector_db.search(query, k=top_k)
-        
-        # Combine and deduplicate results
-        all_results = []
-        seen_titles = set()
-        
-        # Add specific results first (they're more relevant to the current query)
-        for result in specific_results:
-            title = result["metadata"].get("title", "Unknown")
-            if title not in seen_titles:
-                seen_titles.add(title)
-                all_results.append(result)
-        
-        # Add broad results that aren't duplicates
-        for result in broad_results:
-            title = result["metadata"].get("title", "Unknown")
-            if title not in seen_titles:
-                seen_titles.add(title)
-                all_results.append(result)
-        
-        if not all_results:
-            return ""
-        
-        # Format the results
-        context_parts: List[str] = []
-        
-        for result in all_results[:top_k]:  # Take top k results after deduplication
-            title: str = result["metadata"].get("title", "Unknown")
-            content: str = result["metadata"].get("content_preview", "").replace("...", "")
-            score: float = result.get("score", 0.0)
-            
-            # Format the content with better structure
-            context_parts.append(
-                f"Information from '{title}':\n"
-                f"{content}\n"
-                f"(Relevance score: {score:.2f})\n"
-            )
-        
-        return "\n".join(context_parts)
-    except Exception as e:
-        logger.error(f"Error retrieving context: {str(e)}")
-        return ""
-
 def log_ai_interaction(
     user_query: str,
-    context: str,
     messages: List[Dict[str, str]],
     response: str,
-    conversation_id: int,
-    use_rag: bool
+    conversation_id: int
 ) -> None:
     """
     Log AI interaction details to a JSON file.
     
     Args:
         user_query: The user's input query
-        context: The RAG context used
         messages: The full message history sent to the AI
         response: The AI's response
         conversation_id: The ID of the conversation
-        use_rag: Whether RAG was enabled
     """
     # Rotate logs before creating new entry
     rotate_logs()
@@ -189,20 +95,15 @@ def log_ai_interaction(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = LOGS_DIR / f"ai_interactions_{timestamp}.json"
     
-    # Extract system message and RAG context
+    # Extract system message
     system_message = next((msg["content"] for msg in messages if msg["role"] == "system"), None)
     
     # Format the log data with more detailed information
     log_data = {
         "timestamp": datetime.now().isoformat(),
         "conversation_id": conversation_id,
-        "use_rag": use_rag,
         "user_query": user_query,
         "system_message": system_message,
-        "rag_context": {
-            "raw_context": context,
-            "context_sources": context.split("\n\n") if context else []
-        },
         "message_history": [
             {
                 "role": msg["role"],
@@ -269,44 +170,28 @@ async def generate_text(
         db.add(user_message)
 
     try:
-        # Get relevant context if RAG is enabled
-        context: str = ""
-        if request.use_rag and vector_db is not None:
-            context = get_relevant_context(user_query, request.messages)
-            if context:
-                logger.info("Retrieved relevant context for query")
-                logger.debug(f"Context: {context}")  # Add debug logging for context
-            else:
-                logger.info("No relevant context found")
-        
         # Prepare messages for the LLM
         messages: List[Dict[str, str]] = request.messages.copy()
         
-        # If we have context, add a system message with the context
-        if context:
-            # Add a system message at the beginning of the conversation
-            system_msg: Dict[str, str] = {
-                "role": "system",
-                "content": (
-                    "You are a knowledgeable AI assistant with access to a comprehensive knowledge base. "
-                    "Your responses should be accurate, informative, and well-structured. "
-                    "Follow these guidelines:\n\n"
-                    "1. Use the provided information to answer questions accurately and comprehensively\n"
-                    "2. If the information is not relevant to the question, you may ignore it\n"
-                    "3. Be precise and specific in your answers, citing sources when possible\n"
-                    "4. If you're not certain about something, say so and explain why\n"
-                    "5. Maintain a helpful and professional tone\n"
-                    "6. If the user's question is unclear, ask for clarification\n"
-                    "7. Consider the relevance scores when using information\n"
-                    "8. Structure your responses logically with clear paragraphs\n"
-                    "9. Include relevant details and examples when appropriate\n"
-                    "10. If the information is incomplete, acknowledge the limitations\n\n"
-                    f"Here is the relevant information from the knowledge base:\n\n{context}"
-                )
-            }
-            
-            # Insert system message at the beginning
-            messages.insert(0, system_msg)
+        # Add a system message at the beginning of the conversation
+        system_msg: Dict[str, str] = {
+            "role": "system",
+            "content": (
+                "You are a knowledgeable AI assistant. "
+                "Your responses should be accurate, informative, and well-structured. "
+                "Follow these guidelines:\n\n"
+                "1. Be precise and specific in your answers\n"
+                "2. If you're not certain about something, say so and explain why\n"
+                "3. Maintain a helpful and professional tone\n"
+                "4. If the user's question is unclear, ask for clarification\n"
+                "5. Structure your responses logically with clear paragraphs\n"
+                "6. Include relevant details and examples when appropriate\n"
+                "7. If the information is incomplete, acknowledge the limitations"
+            )
+        }
+        
+        # Insert system message at the beginning
+        messages.insert(0, system_msg)
         
         # Create Mistral client with context manager
         with Mistral(api_key=api_key) as client:
@@ -339,11 +224,9 @@ async def generate_text(
             # Log the AI interaction
             log_ai_interaction(
                 user_query=user_query,
-                context=context,
                 messages=messages,
                 response=ai_response,
-                conversation_id=conversation.id,
-                use_rag=request.use_rag
+                conversation_id=conversation.id
             )
 
             return {

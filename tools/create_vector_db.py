@@ -16,11 +16,12 @@ from typing import List, Dict, Any, Tuple, Optional, Union
 import faiss
 import spacy
 from tqdm import tqdm
+import json
 
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ class VectorDatabase:
     """A class for creating, saving, and searching a vector database using FAISS."""
     
     def __init__(self, 
-                 model_name: str = "en_core_web_md", 
+                 model_name: str = "en_core_web_lg", 
                  dimension: int = None,
                  index_type: str = "Flat"):
         """
@@ -124,8 +125,9 @@ class VectorDatabase:
         self.index = None
         self.create_empty_index()
         
-        # Storage for metadata
+        # Storage for metadata and texts
         self.metadata = []
+        self.texts = []
     
     def create_empty_index(self) -> None:
         """Create an empty FAISS index with the specified parameters."""
@@ -178,8 +180,9 @@ class VectorDatabase:
         # Add vectors to the index
         self.index.add(embeddings_array)
         
-        # Store metadata
+        # Store metadata and texts
         self.metadata.extend(metadatas)
+        self.texts.extend(texts)
         
         logger.info(f"Added {len(texts)} texts to the database")
     
@@ -209,6 +212,7 @@ class VectorDatabase:
                 
             result = {
                 "score": float(1.0 - dist / 100.0),  # Convert distance to similarity score
+                "text": self.texts[idx],
                 "metadata": self.metadata[idx]
             }
             results.append(result)
@@ -232,6 +236,11 @@ class VectorDatabase:
         metadata_path = os.path.join(directory, "metadata.pkl")
         with open(metadata_path, 'wb') as f:
             pickle.dump(self.metadata, f)
+            
+        # Save texts
+        texts_path = os.path.join(directory, "texts.pkl")
+        with open(texts_path, 'wb') as f:
+            pickle.dump(self.texts, f)
         
         # Save config
         config_path = os.path.join(directory, "config.pkl")
@@ -276,341 +285,88 @@ class VectorDatabase:
         metadata_path = os.path.join(directory, "metadata.pkl")
         with open(metadata_path, 'rb') as f:
             instance.metadata = pickle.load(f)
+            
+        # Load texts
+        texts_path = os.path.join(directory, "texts.pkl")
+        with open(texts_path, 'rb') as f:
+            instance.texts = pickle.load(f)
         
         logger.info(f"Loaded vector database from {directory} with {len(instance.metadata)} entries")
         return instance
 
-
-def parse_file(file_path: str, chunker: TextChunker) -> List[Tuple[str, Dict[str, Any]]]:
-    """
-    Parse a text file into chunks with metadata.
-    
-    Args:
-        file_path: Path to the text file
-        chunker: TextChunker instance for splitting text
-        
-    Returns:
-        List of (text_chunk, metadata) tuples
-    """
-    with open(file_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-    
-    # Extract the header (expected to be in the format "## Filename")
-    header = None
-    content_text = content
-    header_match = content.split('\n', 1)[0] if '\n' in content else content
-    
-    if header_match.startswith('##'):
-        header = header_match.strip('# \t\n')
-        content_text = content.split('\n', 1)[1] if '\n' in content else ""
-    
-    # Create chunks from the content
-    chunks = chunker.chunk_text(content_text)
-    
-    # Prepare results
-    results = []
-    for i, chunk in enumerate(chunks):
-        # Skip empty chunks
-        if not chunk.strip():
-            continue
-            
-        # If we have a header, include it at the start of each chunk
-        if header:
-            chunk_with_header = f"## {header}\n{chunk}"
-        else:
-            chunk_with_header = chunk
-        
-        # Create metadata
-        metadata = {
-            "source": file_path,
-            "chunk_index": i,
-            "title": header or os.path.basename(file_path).replace('.txt', ''),
-            "content_preview": chunk[:100] + "..." if len(chunk) > 100 else chunk
-        }
-        
-        results.append((chunk_with_header, metadata))
-    
-    return results
-
-
-def build_vector_database(input_dir: str, 
-                          output_dir: str,
-                          model_name: str = "en_core_web_md",
-                          chunk_size: int = 1000,
-                          chunk_overlap: int = 200,
-                          index_type: str = "Flat") -> None:
-    """
-    Build a vector database from text files in the input directory.
-    
-    Args:
-        input_dir: Directory containing text files
-        output_dir: Directory to save the vector database to
-        model_name: spaCy model to use
-        chunk_size: Maximum number of characters per chunk
-        chunk_overlap: Number of characters to overlap between chunks
-        index_type: FAISS index type ('Flat' or 'IVF')
-    """
-    # Find all text files
-    text_files = glob.glob(os.path.join(input_dir, "**", "*.txt"), recursive=True)
-    logger.info(f"Found {len(text_files)} text files in {input_dir}")
-    
-    if not text_files:
-        logger.error(f"No text files found in {input_dir}")
-        return
-    
-    # Create chunker
-    chunker = TextChunker(chunk_size, chunk_overlap)
-    
-    # Create vector database
-    vector_db = VectorDatabase(model_name, index_type=index_type)
-    
-    # Process files
-    total_chunks = 0
-    for file_path in tqdm(text_files, desc="Processing files"):
-        try:
-            # Parse file
-            chunks_with_metadata = parse_file(file_path, chunker)
-            
-            if not chunks_with_metadata:
-                logger.warning(f"No chunks extracted from {file_path}")
-                continue
-            
-            # Add to vector database
-            texts = [chunk for chunk, _ in chunks_with_metadata]
-            metadatas = [metadata for _, metadata in chunks_with_metadata]
-            
-            vector_db.add_texts(texts, metadatas)
-            
-            total_chunks += len(chunks_with_metadata)
-            
-        except Exception as e:
-            logger.error(f"Error processing {file_path}: {str(e)}")
-    
-    logger.info(f"Processed {len(text_files)} files, created {total_chunks} chunks")
-    
-    # Save the vector database
-    vector_db.save(output_dir)
-    logger.info(f"Vector database saved to {output_dir}")
-
-
-def search_database(db_dir: str, query: str, num_results: int = 5) -> None:
-    """
-    Search the vector database for similar texts.
-    
-    Args:
-        db_dir: Directory containing the vector database
-        query: Search query
-        num_results: Number of results to return
-    """
-    # Load the vector database
-    vector_db = VectorDatabase.load(db_dir)
-    
-    # Perform search
-    results = vector_db.search(query, k=num_results)
-    
-    print(f"\nSearch results for: '{query}'\n")
-    print("-" * 80)
-    
-    for i, result in enumerate(results):
-        print(f"[{i+1}] Score: {result['score']:.4f}")
-        print(f"Title: {result['metadata']['title']}")
-        print(f"Source: {result['metadata']['source']}")
-        print(f"Preview: {result['metadata']['content_preview']}")
-        print("-" * 80)
-
-
-def format_wiki_content(title: str, content: str, section: str = None) -> str:
-    """
-    Format wiki content in a structured way for better context preservation.
-    
-    Args:
-        title: The page title
-        content: The content to format
-        section: Optional section name if this is a section of a page
-        
-    Returns:
-        Formatted content string
-    """
-    # Clean up the content
-    content = content.strip()
-    
-    # Format the header
-    header = f"Title: {title}"
-    if section:
-        header += f"\nSection: {section}"
-    
-    # Add metadata
-    metadata = f"Type: Wiki Article\nSource: Dark Souls Wiki"
-    
-    # Format the content with clear sections
-    formatted = f"{header}\n{metadata}\n\nContent:\n{content}"
-    
-    return formatted
-
-def chunk_wiki_content(content: str, max_chunk_size: int = 1000) -> List[str]:
-    """
-    Split wiki content into meaningful chunks while preserving structure.
-    
-    Args:
-        content: The content to chunk
-        max_chunk_size: Maximum size of each chunk
-        
-    Returns:
-        List of content chunks
-    """
-    chunks = []
-    current_chunk = []
-    current_size = 0
-    
-    # Split content into paragraphs
-    paragraphs = content.split('\n\n')
-    
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-            
-        # If this is a new section, start a new chunk
-        if para.startswith('==') or para.startswith('==='):
-            if current_chunk:
-                chunks.append('\n\n'.join(current_chunk))
-                current_chunk = []
-                current_size = 0
-        
-        # If adding this paragraph would exceed max size, start a new chunk
-        if current_size + len(para) > max_chunk_size and current_chunk:
-            chunks.append('\n\n'.join(current_chunk))
-            current_chunk = []
-            current_size = 0
-        
-        current_chunk.append(para)
-        current_size += len(para)
-    
-    # Add the last chunk if it exists
-    if current_chunk:
-        chunks.append('\n\n'.join(current_chunk))
-    
-    return chunks
-
-def process_wiki_file(file_path: str) -> List[Dict[str, Any]]:
-    """
-    Process a wiki file and extract structured content.
-    
-    Args:
-        file_path: Path to the wiki file
-        
-    Returns:
-        List of dictionaries containing processed content
-    """
-    results = []
-    
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # Extract title from filename
-        title = os.path.splitext(os.path.basename(file_path))[0]
-        
-        # Split content into sections
-        sections = content.split('\n==')
-        
-        # Process main content (before first section)
-        main_content = sections[0].strip()
-        if main_content:
-            formatted_content = format_wiki_content(title, main_content)
-            chunks = chunk_wiki_content(formatted_content)
-            
-            for chunk in chunks:
-                results.append({
-                    "title": title,
-                    "content": chunk,
-                    "section": None,
-                    "source": file_path
-                })
-        
-        # Process sections
-        for section in sections[1:]:
-            if not section.strip():
-                continue
-                
-            # Extract section title and content
-            section_lines = section.split('\n')
-            section_title = section_lines[0].strip()
-            section_content = '\n'.join(section_lines[1:]).strip()
-            
-            if section_content:
-                formatted_content = format_wiki_content(title, section_content, section_title)
-                chunks = chunk_wiki_content(formatted_content)
-                
-                for chunk in chunks:
-                    results.append({
-                        "title": title,
-                        "content": chunk,
-                        "section": section_title,
-                        "source": file_path
-                    })
-    
-    except Exception as e:
-        logger.error(f"Error processing file {file_path}: {str(e)}")
-    
-    return results
 
 def create_vector_database(
     wiki_dir: str,
     output_dir: str,
     model_name: str = "en_core_web_lg",
     chunk_size: int = 1000
-) -> None:
+) -> bool:
     """
     Create a vector database from wiki content.
     
     Args:
-        wiki_dir: Directory containing wiki files
+        wiki_dir: Directory containing wiki content
         output_dir: Directory to save the vector database
         model_name: Name of the spaCy model to use
-        chunk_size: Maximum size of content chunks
+        chunk_size: Size of text chunks to process
+        
+    Returns:
+        True if successful, False otherwise
     """
-    # Initialize vector database
-    vector_db = VectorDatabase(model_name=model_name)
-    
-    # Process all wiki files
-    for root, _, files in os.walk(wiki_dir):
-        for file in files:
-            if file.endswith('.txt'):
-                file_path = os.path.join(root, file)
-                logger.info(f"Processing {file_path}")
+    try:
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Initialize vector database
+        vector_db = VectorDatabase(model_name=model_name)
+        
+        # Process all text files in the wiki directory
+        for filename in os.listdir(wiki_dir):
+            if not filename.endswith('.txt'):
+                continue
                 
-                # Process the file and get structured content
-                content_chunks = process_wiki_file(file_path)
+            file_path = os.path.join(wiki_dir, filename)
+            logger.info(f"Processing {filename}")
+            
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
                 
-                # Add chunks to vector database
-                for chunk in content_chunks:
-                    vector_db.add_texts(
-                        texts=[chunk["content"]],
-                        metadatas=[{
-                            "title": chunk["title"],
-                            "section": chunk["section"],
-                            "source": chunk["source"],
-                            "content_preview": chunk["content"][:200] + "..."  # Preview for search results
-                        }]
-                    )
-    
-    # Save the vector database
-    vector_db.save(output_dir)
-    logger.info(f"Vector database saved to {output_dir}")
+            # Process content in chunks
+            chunks = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
+            
+            for i, chunk in enumerate(chunks):
+                # Create metadata
+                metadata = {
+                    'source': filename,
+                    'chunk_index': i,
+                    'title': os.path.splitext(filename)[0],  # Use filename without extension as title
+                    'content_preview': chunk[:200] + '...' if len(chunk) > 200 else chunk
+                }
+                
+                # Add to vector database
+                vector_db.add_texts([chunk], [metadata])
+        
+        # Save the vector database
+        vector_db.save(output_dir)
+        logger.info(f"Successfully created vector database in {output_dir}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error creating vector database: {str(e)}")
+        return False
 
 
 def main():
     """Main entry point for the script."""
     parser = argparse.ArgumentParser(
-        description="Create a vector database from text files using spaCy and FAISS.",
+        description="Create a vector database from wiki content using spaCy and FAISS.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
     parser.add_argument(
-        "--input-dir",
+        "--wiki-dir",
         default="tools/text_data",
-        help="Directory containing text files"
+        help="Directory containing wiki text files"
     )
     
     parser.add_argument(
@@ -621,7 +377,7 @@ def main():
     
     parser.add_argument(
         "--model",
-        default="en_core_web_md",
+        default="en_core_web_lg",
         choices=["en_core_web_sm", "en_core_web_md", "en_core_web_lg"],
         help="spaCy model to use for embeddings"
     )
@@ -630,57 +386,23 @@ def main():
         "--chunk-size",
         type=int,
         default=1000,
-        help="Maximum number of characters per chunk"
-    )
-    
-    parser.add_argument(
-        "--chunk-overlap",
-        type=int,
-        default=200,
-        help="Number of characters to overlap between chunks"
-    )
-    
-    parser.add_argument(
-        "--index-type",
-        default="Flat",
-        choices=["Flat", "IVF"],
-        help="FAISS index type (Flat for exact search, IVF for approximate)"
-    )
-    
-    parser.add_argument(
-        "--search",
-        action="store_true",
-        help="Search mode (requires --query)"
-    )
-    
-    parser.add_argument(
-        "--query",
-        help="Search query (used with --search)"
-    )
-    
-    parser.add_argument(
-        "--num-results",
-        type=int,
-        default=5,
-        help="Number of search results to return"
+        help="Size of text chunks to process"
     )
     
     args = parser.parse_args()
     
-    if args.search:
-        if not args.query:
-            parser.error("--search requires --query")
-        
-        search_database(args.output_dir, args.query, args.num_results)
+    success = create_vector_database(
+        args.wiki_dir,
+        args.output_dir,
+        args.model,
+        args.chunk_size
+    )
+    
+    if success:
+        logger.info("Vector database creation completed successfully")
     else:
-        build_vector_database(
-            args.input_dir,
-            args.output_dir,
-            args.model,
-            args.chunk_size,
-            args.chunk_overlap,
-            args.index_type
-        )
+        logger.error("Failed to create vector database")
+        exit(1)
 
 
 if __name__ == "__main__":
