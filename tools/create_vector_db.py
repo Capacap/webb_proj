@@ -419,6 +419,187 @@ def search_database(db_dir: str, query: str, num_results: int = 5) -> None:
         print("-" * 80)
 
 
+def format_wiki_content(title: str, content: str, section: str = None) -> str:
+    """
+    Format wiki content in a structured way for better context preservation.
+    
+    Args:
+        title: The page title
+        content: The content to format
+        section: Optional section name if this is a section of a page
+        
+    Returns:
+        Formatted content string
+    """
+    # Clean up the content
+    content = content.strip()
+    
+    # Format the header
+    header = f"Title: {title}"
+    if section:
+        header += f"\nSection: {section}"
+    
+    # Add metadata
+    metadata = f"Type: Wiki Article\nSource: Dark Souls Wiki"
+    
+    # Format the content with clear sections
+    formatted = f"{header}\n{metadata}\n\nContent:\n{content}"
+    
+    return formatted
+
+def chunk_wiki_content(content: str, max_chunk_size: int = 1000) -> List[str]:
+    """
+    Split wiki content into meaningful chunks while preserving structure.
+    
+    Args:
+        content: The content to chunk
+        max_chunk_size: Maximum size of each chunk
+        
+    Returns:
+        List of content chunks
+    """
+    chunks = []
+    current_chunk = []
+    current_size = 0
+    
+    # Split content into paragraphs
+    paragraphs = content.split('\n\n')
+    
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+            
+        # If this is a new section, start a new chunk
+        if para.startswith('==') or para.startswith('==='):
+            if current_chunk:
+                chunks.append('\n\n'.join(current_chunk))
+                current_chunk = []
+                current_size = 0
+        
+        # If adding this paragraph would exceed max size, start a new chunk
+        if current_size + len(para) > max_chunk_size and current_chunk:
+            chunks.append('\n\n'.join(current_chunk))
+            current_chunk = []
+            current_size = 0
+        
+        current_chunk.append(para)
+        current_size += len(para)
+    
+    # Add the last chunk if it exists
+    if current_chunk:
+        chunks.append('\n\n'.join(current_chunk))
+    
+    return chunks
+
+def process_wiki_file(file_path: str) -> List[Dict[str, Any]]:
+    """
+    Process a wiki file and extract structured content.
+    
+    Args:
+        file_path: Path to the wiki file
+        
+    Returns:
+        List of dictionaries containing processed content
+    """
+    results = []
+    
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Extract title from filename
+        title = os.path.splitext(os.path.basename(file_path))[0]
+        
+        # Split content into sections
+        sections = content.split('\n==')
+        
+        # Process main content (before first section)
+        main_content = sections[0].strip()
+        if main_content:
+            formatted_content = format_wiki_content(title, main_content)
+            chunks = chunk_wiki_content(formatted_content)
+            
+            for chunk in chunks:
+                results.append({
+                    "title": title,
+                    "content": chunk,
+                    "section": None,
+                    "source": file_path
+                })
+        
+        # Process sections
+        for section in sections[1:]:
+            if not section.strip():
+                continue
+                
+            # Extract section title and content
+            section_lines = section.split('\n')
+            section_title = section_lines[0].strip()
+            section_content = '\n'.join(section_lines[1:]).strip()
+            
+            if section_content:
+                formatted_content = format_wiki_content(title, section_content, section_title)
+                chunks = chunk_wiki_content(formatted_content)
+                
+                for chunk in chunks:
+                    results.append({
+                        "title": title,
+                        "content": chunk,
+                        "section": section_title,
+                        "source": file_path
+                    })
+    
+    except Exception as e:
+        logger.error(f"Error processing file {file_path}: {str(e)}")
+    
+    return results
+
+def create_vector_database(
+    wiki_dir: str,
+    output_dir: str,
+    model_name: str = "en_core_web_lg",
+    chunk_size: int = 1000
+) -> None:
+    """
+    Create a vector database from wiki content.
+    
+    Args:
+        wiki_dir: Directory containing wiki files
+        output_dir: Directory to save the vector database
+        model_name: Name of the spaCy model to use
+        chunk_size: Maximum size of content chunks
+    """
+    # Initialize vector database
+    vector_db = VectorDatabase(model_name=model_name)
+    
+    # Process all wiki files
+    for root, _, files in os.walk(wiki_dir):
+        for file in files:
+            if file.endswith('.txt'):
+                file_path = os.path.join(root, file)
+                logger.info(f"Processing {file_path}")
+                
+                # Process the file and get structured content
+                content_chunks = process_wiki_file(file_path)
+                
+                # Add chunks to vector database
+                for chunk in content_chunks:
+                    vector_db.add_texts(
+                        texts=[chunk["content"]],
+                        metadatas=[{
+                            "title": chunk["title"],
+                            "section": chunk["section"],
+                            "source": chunk["source"],
+                            "content_preview": chunk["content"][:200] + "..."  # Preview for search results
+                        }]
+                    )
+    
+    # Save the vector database
+    vector_db.save(output_dir)
+    logger.info(f"Vector database saved to {output_dir}")
+
+
 def main():
     """Main entry point for the script."""
     parser = argparse.ArgumentParser(

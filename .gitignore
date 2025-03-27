@@ -90,3 +90,6 @@ tools/scraping.log
 # Text data for vector database
 tools/text_data/
 tools/vector_db/
+
+# Backend vector database
+backend/resources/vector_db/
